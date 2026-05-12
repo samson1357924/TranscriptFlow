@@ -1,0 +1,15 @@
+1
+00:00:00,000 --> 00:00:03,000
+Welcome to this short example transcript.
+
+2
+00:00:03,000 --> 00:00:07,000
+TranscriptFlow turns subtitles into semantic chunks.
+
+3
+00:00:07,000 --> 00:00:11,000
+Each chunk can be summarized, tagged, embedded, and stored.
+
+4
+00:00:11,000 --> 00:00:15,000
+The goal is to make long videos searchable for AI workflows.
