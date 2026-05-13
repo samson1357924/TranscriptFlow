@@ -130,7 +130,7 @@ def generate_embedding(text: str, expected_dim: Optional[int] = None) -> Optiona
         logger.error(f"Embedding request failed for text snippet '{text[:30]}...': {e}")
         return None
 
-def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: int = SMART_MERGE_WINDOW_SIZE, min_sentences: int = SMART_MERGE_MIN_SENTENCES, high_pct: float = SMART_MERGE_WEAK_PCT, low_pct: float = SMART_MERGE_STRONG_PCT, noise_drop_len: int = SMART_MERGE_NOISE_DROP_LEN, noise_weak_len: int = SMART_MERGE_NOISE_WEAK_LEN ) -> tuple[List[Dict], List[int]]:
+def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: int = SMART_MERGE_WINDOW_SIZE, min_sentences: int = SMART_MERGE_MIN_SENTENCES, high_pct: float = SMART_MERGE_WEAK_PCT, low_pct: float = SMART_MERGE_STRONG_PCT, noise_drop_len: int = SMART_MERGE_NOISE_DROP_LEN, noise_weak_len: int = SMART_MERGE_NOISE_WEAK_LEN ) -> tuple[List[Dict], List[int], List[Dict]]:
     total_entries = len(entries)
     if total_entries < window_size:
         return [{
@@ -139,7 +139,7 @@ def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: in
             'start_time': entries[0].start_time,
             'end_time': entries[-1].end_time,
             'text': ' '.join(e.text for e in entries)
-        }], []
+        }], [], []
 
     # 1. 產生重疊窗口 (stride = 1)
     windows = []
@@ -183,7 +183,7 @@ def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: in
 
     if len([v for v in vectors if v is not None]) < 2:
         logger.error("有效向量過少，無法執行 Smart Merge")
-        return [], failed_windows
+        return [], failed_windows, []
 
     valid_vec_count = len([v for v in vectors if v is not None])
     logger.info(f"📊 Embedding 向量化完成：有效向量 {valid_vec_count}/{len(windows)} 個")
@@ -194,7 +194,7 @@ def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: in
     logger.info(f"📊 Embedding 完成：有效 {valid_vec_count}/{len(windows)} 個向量")
     if valid_vec_count < 5:
         logger.error(f"有效向量不足（{valid_vec_count}），無法執行 Smart Merge")
-        return [], failed_windows
+        return [], failed_windows, []
     
     # 3. 計算「無重疊、但相鄰」的 Cosine 相似度
     sims = []
@@ -217,7 +217,7 @@ def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: in
             'start_time': entries[0].start_time,
             'end_time': entries[-1].end_time,
             'text': ' '.join(e.text for e in entries)
-        }], failed_windows
+        }], failed_windows, []
 
     # 4. 斷點強度排序
     n_sims = len(sims)
@@ -258,47 +258,73 @@ def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: in
         else:
             logger.debug(f"捨棄待定斷點 {bp_line} (左:{left_sentences}, 右:{right_sentences} < {min_sentences})")
 
-    # 6. 雜訊過濾與產生最終段落
+    # 6. 建立斷點強度查詢表
+    bp_meta = {}
+    n_sims_bp = len(sims)
+    for rank, sim_idx in enumerate(sorted_idx):
+        bp_line = sim_to_break_idx[sim_idx]
+        bp_meta[bp_line] = {
+            'strength_pct': round((rank + 1) / n_sims_bp * 100, 1),
+            'cosine': round(sims[sim_idx], 4),
+            'strength': round(strengths[sim_idx], 4),
+        }
+
+    # 7. 雜訊過濾與產生最終段落
     final_chunks = []
+    discarded_chunks = []
     for i in range(len(active_breaks) - 1):
         start_idx = active_breaks[i]
         end_idx = active_breaks[i+1] - 1
         chunk_len = end_idx - start_idx + 1
-
-        # 規則 A: <= 2 行直接拋棄
-        if chunk_len <= noise_drop_len:
-            logger.info(f"過濾雜訊: 段落 [{start_idx}~{end_idx}] 僅 {chunk_len} 行 (<= {noise_drop_len}), 拋棄。")
-            continue
-
-        # 規則 B: == 3 行，且兩端皆為 < 2% 極弱連結，拋棄
-        if chunk_len == noise_weak_len:
-            left_strength, right_strength = 0.0, 0.0
-            try:
-                l_idx = sim_to_break_idx.index(start_idx)
-                left_strength = strengths[l_idx]
-            except ValueError:
-                pass
-            try:
-                r_idx = sim_to_break_idx.index(end_idx + 1)
-                right_strength = strengths[r_idx]
-            except ValueError:
-                pass
-            if left_strength >= low_pct_strength_threshold and right_strength >= low_pct_strength_threshold:
-                logger.info(f"過濾雜訊: 段落 [{start_idx}~{end_idx}] 為 {noise_weak_len} 行且兩端皆為極弱連結，拋棄。")
-                continue
-
-        # 通過過濾
         seg = entries[start_idx : end_idx + 1]
-        final_chunks.append({
+
+        def _bp_info(entry_idx):
+            if entry_idx == 0:
+                return {'boundary_side': 'left', 'strength_pct': None, 'cosine': None, 'label': '檔案起點'}
+            if entry_idx == total_entries:
+                return {'boundary_side': 'right', 'strength_pct': None, 'cosine': None, 'label': '檔案終點'}
+            info = bp_meta.get(entry_idx)
+            if info:
+                return {**info, 'boundary_side': 'auto', 'label': f"{info['strength_pct']}%"}
+            return {'boundary_side': 'auto', 'strength_pct': None, 'cosine': None, 'label': '-'}
+
+        left_bp = _bp_info(start_idx)
+        right_bp = _bp_info(active_breaks[i + 1])
+
+        _chunk_base = {
             'chunk_id': f"{file_id}_{start_idx}",
             'start_time': seg[0].start_time,
             'end_time': seg[-1].end_time,
             'entry_count': chunk_len,
             'text_content': ' '.join(e.text for e in seg),
             'boundary_type': 'semantic',
-        })
+            'left_boundary': left_bp,
+            'right_boundary': right_bp,
+        }
 
-    return final_chunks, failed_windows
+        # 規則 A: <= 2 行直接拋棄
+        if chunk_len <= noise_drop_len:
+            logger.info(f"過濾雜訊: 段落 [{start_idx}~{end_idx}] 僅 {chunk_len} 行 (<= {noise_drop_len}), 拋棄。")
+            _chunk_base['dropped'] = True
+            _chunk_base['drop_reason'] = f'noise_too_short (<= {noise_drop_len} lines)'
+            discarded_chunks.append(_chunk_base)
+            continue
+
+        # 規則 B: == 3 行，且兩端皆為 < 2% 極弱連結，拋棄
+        if chunk_len == noise_weak_len:
+            l_strength = bp_meta.get(start_idx, {}).get('strength', 0.0)
+            r_strength = bp_meta.get(active_breaks[i + 1], {}).get('strength', 0.0)
+            if l_strength >= low_pct_strength_threshold and r_strength >= low_pct_strength_threshold:
+                logger.info(f"過濾雜訊: 段落 [{start_idx}~{end_idx}] 為 {noise_weak_len} 行且兩端皆為極弱連結，拋棄。")
+                _chunk_base['dropped'] = True
+                _chunk_base['drop_reason'] = 'noise_weak_links (both ends below strong threshold)'
+                discarded_chunks.append(_chunk_base)
+                continue
+
+        # 通過過濾
+        final_chunks.append(_chunk_base)
+
+    return final_chunks, failed_windows, discarded_chunks
 
 def semantic_chunk(entries: List[SubtitleEntry], file_id: int, threshold: Union[float, str] = "auto") -> List[Dict]:
     """Create semantic chunks using Smart Merge 3.0 algorithm. NO FALLBACK."""

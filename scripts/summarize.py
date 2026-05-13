@@ -258,6 +258,9 @@ def phase_summarizing(file_id, batch_file):
 
     if not os.path.exists(chunk_file):
         raise RuntimeError(f"Chunk file not found: {chunk_file}")
+    if os.path.exists(summarized_fn):
+        os.remove(summarized_fn)
+        logger.info(f"[{file_id}] Removed stale output: {summarized_fn}")
 
     pipeline_script = os.path.join(os.path.dirname(__file__), 'summarize_pipeline.py')
     cmd = [PYTHON_EXE, pipeline_script, "--input", chunk_file, "--output", summarized_fn]
@@ -271,7 +274,13 @@ def phase_summarizing(file_id, batch_file):
     if not os.path.exists(summarized_fn):
         raise RuntimeError(f"Summarize produced no output: {summarized_fn}")
 
-    logger.info(f"[{file_id}] Phase 2 (summarizing) complete")
+    with open(summarized_fn, 'r', encoding='utf-8') as f:
+        summarized_data = json.load(f)
+    done_count = sum(1 for ch in summarized_data if ch.get('status') == 'done')
+    if done_count == 0:
+        raise RuntimeError(f"All {len(summarized_data)} chunks failed summarization")
+
+    logger.info(f"[{file_id}] Phase 2 (summarizing) complete: {done_count}/{len(summarized_data)} chunks done")
 
 
 def phase_embedding(file_id, batch_file):
@@ -347,8 +356,7 @@ def phase_db_inserting(file_id, batch_file):
         records = json.load(f)
 
     if not records:
-        logger.warning(f"[{file_id}] No records to write")
-        return
+        raise RuntimeError(f"[{file_id}] No records to write — all chunks failed or empty")
 
     from finalize import write_to_db
     success, msg = write_to_db(records)

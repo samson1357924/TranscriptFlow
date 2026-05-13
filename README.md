@@ -58,17 +58,13 @@ It is useful when:
 ## What It Is Not
 
 TranscriptFlow is not a one-click archival tool and does not download videos for you. It expects subtitle files and a manifest. It also does not assume that LLMs are reliable enough to own timestamp segmentation directly. LLMs are used where they are strongest: summarization, tagging, and metadata extraction after the transcript has already been split into validated chunks.
-
 ## Key Features
 
 - **Smart Merge 3.0 semantic chunking**: overlapping subtitle windows, embedding cosine similarity, percentile breakpoints, minimum-span validation, and noise filtering.
 - **Four-phase pipeline**: chunking, summarization, embedding, and LanceDB insertion.
-- **11-state workflow**: explicit file states from `undone` through `done`, including retryable and permanent failure states.
+- **Chunk & retry tracking**: chunk-level retries that preserve successful work, per-model diagnostics.
 - **Watchdog automation**: scans batch status files, advances eligible work, resets timed-out jobs, and manages phase concurrency.
-- **Chunk-level retry**: failed chunks can be retried independently across models.
-- **Model diagnostics**: records success/failure counts, elapsed time, throughput, and common error patterns.
-- **Batch audit tooling**: checks structure, timeliness, data integrity, error visibility, model performance, and cross-file consistency.
-- **OpenAI-compatible API support**: works with OpenAI, LiteLLM Proxy, OpenRouter, vLLM, Ollama-compatible servers, or any service exposing compatible `/v1/chat/completions` and `/v1/embeddings` endpoints.
+- **OpenAI-compatible API**: works with OpenAI, LiteLLM Proxy, OpenRouter, vLLM, etc.
 
 ## Tunable Parameters
 
@@ -116,7 +112,7 @@ auto_watchdog.py
                 finalize.py -> LanceDB
 ```
 
-## Quick Start
+## Quick Start (Production Pipeline)
 
 ```bash
 git clone https://github.com/samson1357924/TranscriptFlow.git
@@ -133,11 +129,56 @@ cp scripts/config.example.json scripts/config.json
 Edit `.env` and `scripts/config.json` for your API endpoint, model names, output directory, and LanceDB path.
 
 ```bash
-export $(grep -v '^#' .env | xargs)
+set -a && source .env && set +a
 
 python3 scripts/state_manager.py init_batch 0 0
 python3 scripts/auto_watchdog.py
 ```
+
+> **Note**: Use `set -a && source .env && set +a` instead of `export $(grep -v '^#' .env | xargs)` to avoid shell stripping double quotes from JSON values.
+
+## Test Pipeline (方案 A — Single Run)
+
+For quick parameter testing without LanceDB writes:
+
+```bash
+python3 scripts/chunk_test_runner.py --file-id 11
+python3 scripts/chunk_test_runner.py --file-id 11 --chunk-params '{"window_size":3}'
+python3 scripts/chunk_test_runner.py --file-id 11 --models '["NV-deepseek-v4-flash"]'
+```
+
+Output: `.txt` report + `.json` structured data per run, containing:
+- File info, params, participants
+- All segments sorted by time (excluded chunks flagged with reason +边界 percentile ranking & cosine)
+- Summary per chunk with model name, tags, original text
+
+## Test Suite (方案 B — Multi-config Comparison)
+
+For comparing multiple parameter sets across files, create a suite JSON:
+
+```json
+{
+    "name": "視窗大小比較",
+    "files": [0, 11],
+    "configs": [
+        {"label": "baseline",   "chunking": {"smart_merge_window_size": 5, ...}, "models": [...]},
+        {"label": "window_3",   "chunking": {"smart_merge_window_size": 3}},
+        {"label": "strong_0_03","chunking": {"smart_merge_strong_pct": 0.03}}
+    ]
+}
+```
+
+Run:
+
+```bash
+python3 scripts/chunk_test_suite.py --suite my_suite.json
+```
+
+Outputs individual `.txt` + `.json` per `(file × config)`, plus a comparison report with:
+- Parameter cross-reference table
+- Quantitative stats (kept/excluded counts per config)
+- Full segment listings with boundary strength
+- Difference analysis (which segments changed status between configs)
 
 ## Configuration
 
@@ -152,7 +193,6 @@ Important environment variables:
 ```bash
 OPENAI_BASE_URL=https://api.openai.com
 OPENAI_API_KEY=replace-with-your-key
-SUMMARIZATION_MODELS='["gpt-4.1-mini"]'
 EMBEDDING_MODEL=text-embedding-3-large
 EMBEDDING_EXPECTED_DIM=3072
 SRT_OUTPUT_DIR=./output
@@ -160,14 +200,7 @@ SRT_DB_PATH=./lancedb
 SRT_MASTER_FILE=./examples/master_file_manifest.example.json
 ```
 
-LiteLLM remains supported because it exposes the same OpenAI-compatible interface:
-
-```bash
-OPENAI_BASE_URL=http://localhost:4000
-OPENAI_API_KEY=your-litellm-key
-```
-
-Legacy `LITELLM_PROXY_URL` and `LITELLM_PROXY_KEY` are still accepted for existing local setups, but new deployments should prefer `OPENAI_BASE_URL` and `OPENAI_API_KEY`.
+**Note**: Prefer setting `summarization.models` in `config.json` over `SUMMARIZATION_MODELS` env var, as shell variable parsing can strip JSON double quotes.
 
 Do not commit `.env`, `scripts/config.json`, generated output, or LanceDB data.
 
@@ -184,22 +217,11 @@ failed -> undone
 failed_permanent
 ```
 
-The watchdog advances queued work, resets stale active jobs, and prevents terminal states from being retried accidentally.
-
-## Example Manifest
-
-The batch initializer expects a manifest JSON file that maps file IDs to SRT files. See [examples/master_file_manifest.example.json](examples/master_file_manifest.example.json).
-
-## Open Source Status
-
-This repository was prepared from a personal AI-assisted engineering project. The architecture, reliability model, workflow design, and final review are human-owned; AI agents were used as implementation accelerators for scaffolding, refactoring, debugging, and documentation.
-
 ## Roadmap
 
-- Extract the OpenAI-compatible request layer into a dedicated client module.
-- Add provider-specific examples for LiteLLM, OpenRouter, vLLM, and local Ollama-compatible servers.
-- Add integration tests with mocked chat and embedding endpoints.
-- Add CLI ergonomics around batch initialization and phase selection.
+- [ ] Provider-specific examples for LiteLLM, OpenRouter, vLLM
+- [ ] Integration tests with mocked chat and embedding endpoints
+- [ ] CLI ergonomics around batch initialization and phase selection
 
 ## License
 

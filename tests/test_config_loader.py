@@ -8,9 +8,10 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 
-def test_example_config_loads_without_private_defaults():
+def test_example_config_loads_without_private_defaults(monkeypatch):
     import config_loader
 
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", SCRIPTS / "config.example.json")
     config_loader._config = None
     cfg = config_loader.get_config()
 

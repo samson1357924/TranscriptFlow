@@ -12,6 +12,8 @@ venv/
 # Local configuration and secrets
 .env
 scripts/config.json
+scripts/config_*.json
+scripts/suite_file_*.json
 
 # Pipeline outputs
 output/
