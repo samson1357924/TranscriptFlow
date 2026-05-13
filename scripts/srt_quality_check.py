@@ -16,6 +16,7 @@ import sys
 import time
 from datetime import datetime
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config_loader import get_api_config, get_env_or_config, get_nested_config
@@ -192,7 +193,12 @@ def main():
     parser.add_argument('--interactive', action='store_true', help='互動修正模式')
     parser.add_argument('--window-size', type=int, default=10)
     parser.add_argument('--stride', type=int, default=5)
+    parser.add_argument('--concurrency', type=int, default=None,
+                        help='並行 LLM 呼叫數（預設從 config.json 讀取）')
     args = parser.parse_args()
+    if args.concurrency is None:
+        args.concurrency = get_env_or_config(
+            'SRT_QUALITY_CONCURRENCY', 'srt_quality.concurrency', 5)
 
     # 載入 SRT
     if args.file_id is not None:
@@ -212,17 +218,31 @@ def main():
     windows = build_windows(entries, args.window_size, args.stride)
     print(f"滑窗：{len(windows)} 個 (window_size={args.window_size}, stride={args.stride})\n")
 
-    # 逐窗送 LLM 評分
+    # 並行送 LLM 評分
     windows_results = []
-    for win_start, win_entries in windows:
+    total_windows = len(windows)
+    done_count = 0
+    lock = __import__('threading').Lock()
+
+    def process_one_window(win_start, win_entries):
         window_text = format_window(win_entries, win_start)
-        print(f"  評分 window [{win_start + 1}~{win_start + len(win_entries)}]...", end=' ', flush=True)
         result = call_llm_for_scoring(window_text, win_start)
         result['window_start'] = win_start
-        windows_results.append(result)
-        total = result.get('total_score', 0)
-        flagged = len(result.get('flagged_entries', {}))
-        print(f"總分 {total}/100, 標記 {flagged} 行")
+        return result
+
+    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+        futures = {ex.submit(process_one_window, ws, we): (ws, we) for ws, we in windows}
+        for fut in as_completed(futures):
+            result = fut.result()
+            windows_results.append(result)
+            with lock:
+                done_count += 1
+                total = result.get('total_score', 0)
+                flagged = len(result.get('flagged_entries', {}))
+                ws = result.get('window_start', 0)
+                we = ws + args.window_size - 1
+                print(f"  [{done_count}/{total_windows}] window {ws + 1}~{we + 1}: "
+                      f"總分 {total}/100, 標記 {flagged} 行", flush=True)
 
     # 彙整跨窗標記
     flagged_summary = aggregate_flags(windows_results, args.window_size, args.stride)

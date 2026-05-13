@@ -50,6 +50,10 @@
     "phase3_embedding": 1,
     "phase4_db_insert": 1
   },
+  "srt_quality": {
+    "_comment": "SRT 字幕品質檢查參數",
+    "concurrency": 5
+  },
   "watchdog": {
     "max_working_time_sec": 600
   },
