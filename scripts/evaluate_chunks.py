@@ -105,7 +105,7 @@ def call_llm_evaluate(chunk: dict) -> dict:
 }}"""
 
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
-    models = get_env_or_config('EVALUATION_MODELS', 'evaluation.models', None)
+    models = get_env_or_config('EVALUATION_CHUNK_MODELS', 'evaluation.chunk_models', None)
     if models is None:
         models = get_env_or_config('SUMMARIZATION_MODELS', 'summarization.models', ["gpt-4.1-mini"])
 

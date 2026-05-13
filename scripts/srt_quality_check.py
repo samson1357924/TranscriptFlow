@@ -79,7 +79,7 @@ def call_llm_for_scoring(window_text: str, start_idx: int) -> dict:
   }}
 }}"""
 
-    models = get_env_or_config('EVALUATION_MODELS', 'evaluation.models', None)
+    models = get_env_or_config('SRT_QUALITY_MODELS', 'srt_quality.models', None)
     if models is None:
         models = get_env_or_config('SUMMARIZATION_MODELS', 'summarization.models', ["gpt-4.1-mini"])
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}

@@ -52,11 +52,13 @@
   },
   "srt_quality": {
     "_comment": "SRT 字幕品質檢查參數",
-    "concurrency": 5
+    "concurrency": 5,
+    "models": ["gpt-4.1-mini", "gpt-4o-mini"]
   },
   "evaluation": {
-    "_comment": "B+ chunk 品質評分、摘要忠實度、SRT 品質檢查使用的 LLM 模型清單。未設定時 fallback 至 summarization.models",
-    "models": ["gpt-4.1-mini", "gpt-4o-mini"]
+    "_comment": "B+ chunk 品質評分與摘要忠實度使用的 LLM 模型",
+    "chunk_models": ["gpt-4.1-mini", "gpt-4o-mini"],
+    "fidelity_models": ["gpt-4.1-mini", "gpt-4o-mini"]
   },
   "watchdog": {
     "max_working_time_sec": 600
