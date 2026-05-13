@@ -216,6 +216,8 @@ python3 scripts/srt_quality_check.py --input sample.srt --output report.txt
 
 Windows of 10 entries with 5-entry overlap. Each entry flagged by ≥2 windows → 🔴 **problem**, 1 window → 🟡 **questionable**. Scores 4 dimensions (0-25 each): coherence, logic, wording quality, timestamp合理性.
 
+Concurrent processing via `ThreadPoolExecutor` (default 5 workers). Configurable in `config.json` under `srt_quality.concurrency` or via `--concurrency N`. Evaluation model set via `srt_quality.models` (fallback: `summarization.models`).
+
 ## B+ Chunk Quality Evaluation
 
 Evaluate chunk boundary and noise handling quality from test suite JSON outputs:
@@ -227,6 +229,8 @@ python3 scripts/evaluate_chunks.py --reports /path/to/dir --sample 10
 
 Scores (total 100): boundary reasonableness (coherence 25 + breakpoint correctness 25) + noise handling 50. Outputs cross-config comparison with best-param recommendation.
 
+Evaluation model config: `evaluation.chunk_models` in `config.json` (fallback: `summarization.models`).
+
 ## Summary Fidelity Evaluation
 
 Assess whether LLM summaries faithfully reflect chunk content, independent of chunk quality:
@@ -237,6 +241,8 @@ python3 scripts/evaluate_summary_fidelity.py --reports /path/to/dir --sample 5
 ```
 
 Scores (0-25 each): factual accuracy, completeness, neutrality, overall quality. Detects hallucinated content and missing key points per model.
+
+Evaluation model config: `evaluation.fidelity_models` in `config.json` (fallback: `summarization.models`).
 
 ## Manifest Generator
 

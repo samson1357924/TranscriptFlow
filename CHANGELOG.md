@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.3 (2026-05-14): Parallel Quality Check, Evaluation Model Config & Code Cleanup
+
+### 🚀 New Features
+
+- **`srt_quality_check.py` 並行處理** — 支援 `--concurrency` 參數，透過 `ThreadPoolExecutor` 同時送多窗給 LLM 評分。預設 5，可從 `config.json` `srt_quality.concurrency` 設定
+- **評估腳本獨立 model 設定** — `srt_quality_check.py` 讀取 `srt_quality.models`，`evaluate_chunks.py` 讀取 `evaluation.chunk_models`，`evaluate_summary_fidelity.py` 讀取 `evaluation.fidelity_models`，各自未設定時 fallback 至 `summarization.models`
+
+### 🔧 Improvements
+
+- **`.gitignore` 加入 `.progress/` / `.failed_reports/`** — 防禦性保護動態產生目錄
+- **死亡狀態清理** — 移除 `_VALID_TRANSITIONS` 中的 `working` 與 `verified-1`（無任何程式碼會轉入），刪除 `parse_validator_output()` 函數與對應 CLI 入口
+- **`auto_watchdog.py` / `batch_audit.py` 同步清理** — 移除 `working` 相關的死碼分支
+- **`validate_config()` 變數重新命名** — `cw`→`window_size`、`mc`→`min_chunks_val`、`mxc`→`max_chunks_val`、`edim`→`embed_dim`、`pc`→`participant_chunks_val`、`mr`→`max_retries_val`
+
 ## v1.2 (2026-05-13): LLM Quality Evaluation & SRT Checker
 
 ### 🚀 New Features
