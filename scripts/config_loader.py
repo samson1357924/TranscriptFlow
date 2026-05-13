@@ -14,7 +14,7 @@ from typing import Any, Optional, List
 
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-CONFIG_PATH = Path(os.getenv('TRANSCRIPTFLOW_CONFIG', SCRIPT_DIR / 'config.json'))
+CONFIG_PATH = Path(os.getenv('TRANSCRIPTFLOW_CONFIG', PROJECT_ROOT / 'config.json'))
 EXAMPLE_CONFIG_PATH = SCRIPT_DIR / 'config.example.json'
 
 _config = None

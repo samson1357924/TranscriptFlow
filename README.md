@@ -123,10 +123,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-cp scripts/config.example.json scripts/config.json
+cp scripts/config.example.json config.json
 ```
 
-Edit `.env` and `scripts/config.json` for your API endpoint, model names, output directory, and LanceDB path.
+Edit `.env` and `config.json` for your API endpoint, model names, output directory, and LanceDB path.
 
 ```bash
 set -a && source .env && set +a
@@ -185,7 +185,7 @@ Outputs individual `.txt` + `.json` per `(file × config)`, plus a comparison re
 TranscriptFlow reads settings in this order:
 
 1. Environment variables
-2. `scripts/config.json`
+2. `config.json` (project root)
 3. `scripts/config.example.json`
 
 Important environment variables:
@@ -202,7 +202,7 @@ SRT_MASTER_FILE=./examples/master_file_manifest.example.json
 
 **Note**: Prefer setting `summarization.models` in `config.json` over `SUMMARIZATION_MODELS` env var, as shell variable parsing can strip JSON double quotes.
 
-Do not commit `.env`, `scripts/config.json`, generated output, or LanceDB data.
+Do not commit `.env`, `config.json`, `test_params_suite.json`, generated output, or LanceDB data.
 
 ## State Machine
 

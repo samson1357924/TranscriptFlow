@@ -1,0 +1,46 @@
+{
+    "name": "Smart Merge 參數比較 — 範例",
+    "files": [0],
+    "description": "複製此檔案為 test_params_suite.json 並修改參數後使用",
+    "configs": [
+        {
+            "label": "baseline",
+            "chunking": {
+                "smart_merge_window_size": 5,
+                "smart_merge_strong_pct": 0.02,
+                "smart_merge_weak_pct": 0.05,
+                "smart_merge_min_sentences": 8,
+                "smart_merge_noise_drop_len": 2,
+                "smart_merge_noise_weak_len": 3
+            },
+            "models": [
+                "gpt-4.1-mini",
+                "gpt-4o-mini"
+            ]
+        },
+        {
+            "label": "window_3",
+            "chunking": {
+                "smart_merge_window_size": 3
+            }
+        },
+        {
+            "label": "window_8",
+            "chunking": {
+                "smart_merge_window_size": 8
+            }
+        },
+        {
+            "label": "strong_0_015",
+            "chunking": {
+                "smart_merge_strong_pct": 0.015
+            }
+        },
+        {
+            "label": "weak_0_07",
+            "chunking": {
+                "smart_merge_weak_pct": 0.07
+            }
+        }
+    ]
+}

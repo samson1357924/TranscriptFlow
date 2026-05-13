@@ -763,9 +763,13 @@ def main():
     if not output_dir:
         SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
         try:
-            with open(os.path.join(SCRIPT_DIR, 'config.json'), 'r') as f:
-                cfg = json.load(f)
-            output_dir = cfg.get('paths', {}).get('output_dir', '')
+            for p in [os.path.join(SCRIPT_DIR, '..', 'config.json'), os.path.join(SCRIPT_DIR, 'config.json')]:
+                if os.path.exists(p):
+                    with open(p, 'r') as f:
+                        cfg = json.load(f)
+                    output_dir = cfg.get('paths', {}).get('output_dir', '')
+                    if output_dir:
+                        break
         except:
             pass
     if not output_dir:
@@ -778,9 +782,13 @@ def main():
     if not master_file:
         SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
         try:
-            with open(os.path.join(SCRIPT_DIR, 'config.json'), 'r') as f:
-                cfg = json.load(f)
-            master_file = cfg.get('paths', {}).get('master_file', '')
+            for p in [os.path.join(SCRIPT_DIR, '..', 'config.json'), os.path.join(SCRIPT_DIR, 'config.json')]:
+                if os.path.exists(p):
+                    with open(p, 'r') as f:
+                        cfg = json.load(f)
+                    master_file = cfg.get('paths', {}).get('master_file', '')
+                    if master_file:
+                        break
         except:
             pass
     if not master_file:

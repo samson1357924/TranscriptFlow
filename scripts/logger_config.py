@@ -24,8 +24,11 @@ class SensitiveDataFilter(logging.Filter):
         # 優先從 config.json 讀取 API Key
         api_key = None
         try:
-            with open(os.path.join(os.path.dirname(__file__), 'config.json'), 'r') as f:
-                import json
+            import json
+            cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.json')
+            if not os.path.exists(cfg_path):
+                cfg_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            with open(cfg_path, 'r') as f:
                 cfg = json.load(f)
                 api_key = cfg.get('api', {}).get('api_key', '')
         except:
