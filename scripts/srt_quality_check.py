@@ -50,34 +50,37 @@ def load_manifest_entry(file_id: int) -> str:
 
 
 def call_llm_for_scoring(window_text: str, start_idx: int) -> dict:
-    prompt = f"""你是一個字幕品質審查員。以下是某影片字幕的一小段（{start_idx + 1} 行），每行前面有編號和時間戳。
+    json_example = '''{
+  "scores": {
+    "連貫性": {"score": 18, "reason": "..."},
+    "邏輯合理性": {"score": 20, "reason": "..."},
+    "語句品質": {"score": 15, "reason": "..."},
+    "時間合理性": {"score": 22, "reason": "..."}
+  },
+  "total_score": 75,
+  "flagged_entries": {
+    "3": {"severity": "major", "issue": "原文:'...' 錯字或轉錄錯誤"}
+  }
+}'''
 
-請針對此段落的整體品質評分（0-25 each，總分 100）：
+    prompt = f"""你是一個字幕品質審查員。以下是某段對話字幕。
 
-1. 連貫性: 語句之間是否流暢銜接、主題是否一致
-2. 邏輯合理性: 對話邏輯是否合理、有無矛盾或不通順處
-3. 語句品質: 有無錯字、語法錯誤、轉錄錯誤
-4. 時間合理性: 時間戳長度與對白量是否合理
+請評分（0-25 each）且只回傳 JSON：
+1. 連貫性: 語句是否流暢
+2. 邏輯合理性: 有無矛盾
+3. 語句品質: 有無錯字或轉錄錯誤
+4. 時間合理性: 時間戳是否合理
 
-另外，請標記有問題的具體行號（從 1 開始），以及每個問題的嚴重程度（major/minor）。
+注意：
+- 這是自然對話，填充詞與不完整句子是正常的，**不要標記**
+- 只標記真正的錯字、轉錄錯誤、明顯的時間戳問題
+- flagged_entries 的 key 必須是行號數字，issue 必須以原文: 開頭引用實際存在的文字
+- 沒問題就不要列在 flagged_entries 裡
 
-字幕段落：
+字幕：
 {window_text}
 
-回覆 JSON 格式：
-{{
-  "scores": {{
-    "連貫性": {{"score": N, "reason": "..."}},
-    "邏輯合理性": {{"score": N, "reason": "..."}},
-    "語句品質": {{"score": N, "reason": "..."}},
-    "時間合理性": {{"score": N, "reason": "..."}}
-  }},
-  "total_score": N,
-  "flagged_entries": {{
-    "3": {{"severity": "major", "issue": "語意不完整，疑似轉錄斷句錯誤"}},
-    "7": {{"severity": "minor", "issue": "時間戳與前一句差距過大"}}
-  }}
-}}"""
+{json_example}"""
 
     models = get_env_or_config('SRT_QUALITY_MODELS', 'srt_quality.models', None)
     if models is None:
