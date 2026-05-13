@@ -20,6 +20,8 @@ test_params_suite.json
 output/
 lancedb/
 structured_yt_data/
+.progress/
+.failed_reports/
 *.log
 
 # OS/editor noise

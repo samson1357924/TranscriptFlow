@@ -234,8 +234,6 @@ _VALID_TRANSITIONS = {
     'embedding': {'queueing_3', 'db_inserting', 'undone'},
     'queueing_3': {'db_inserting', 'undone'},
     'db_inserting': {'done', 'undone'},
-    'working': {'undone'},
-    'verified-1': {'undone'},
     'done': set(),
     'failed': {'undone'},
     'failed_permanent': set(),
@@ -305,31 +303,6 @@ def update_state(file_id, new_status, error_msg=None, used_model=None):
 
     _locked_read_write(modify)
     for m in result_msg: print(m)
-
-def parse_validator_output(file_id, model_name, output_str):
-    try:
-        match = re.search(r'\{.*\}', output_str.replace('\n', ''), re.DOTALL)
-        json_str = match.group(0) if match else output_str
-        result_data = json.loads(json_str)
-        if result_data.get("result") == "VALIDATED":
-            validated_count = result_data.get("segment_count")
-            update_state(file_id, "verified-1", None, model_name)
-            if validated_count is not None:
-                def set_val_count(data):
-                    for item in data:
-                        if item["file_id"] == int(file_id):
-                            item["validated_segment_count"] = validated_count
-                            return data
-                    return None
-                _locked_read_write(set_val_count)
-            print(f"Validator parser: File {file_id} VALIDATED with {validated_count} segments (Model: {model_name}).")
-        else:
-            err = result_data.get("reason", "Marked INVALID by Validator")
-            update_state(file_id, "failed", err, model_name)
-            print(f"Validator parser: File {file_id} INVALID. Reason: {err} (Model: {model_name})")
-    except Exception as e:
-        update_state(file_id, "failed", f"Validator JSON parsing error: {str(e)}", model_name)
-        print(f"Validator parser: File {file_id} JSON parsing failed (Model: {model_name}).")
 
 def print_summary():
     data = load_status()
@@ -405,10 +378,5 @@ if __name__ == "__main__":
             err = sys.argv[args_offset+2] if len(sys.argv) > args_offset+2 else None
             model = sys.argv[args_offset+3] if len(sys.argv) > args_offset+3 else None
             update_state(file_id, status, err, model)
-        elif cmd == "parse_validator" and len(sys.argv) >= args_offset + 3:
-            file_id = sys.argv[args_offset]
-            model = sys.argv[args_offset+1]
-            output_str = sys.argv[args_offset+2]
-            parse_validator_output(file_id, model, output_str)
         elif cmd == "summary":
             print_summary()

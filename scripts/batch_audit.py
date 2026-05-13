@@ -44,7 +44,7 @@ VALID_FILE_STATES = {
     'embedding', 'queueing_3', 'db_inserting', 'done', 'failed', 'failed_permanent',
 }
 VALID_CHUNK_STATES = {'pending', 'done', 'failed', 'failed_permanent', 'undone'}
-ACTIVE_STATES = {'chunking', 'summarizing', 'embedding', 'db_inserting', 'working'}
+ACTIVE_STATES = {'chunking', 'summarizing', 'embedding', 'db_inserting'}
 TERMINAL_STATES = {'done', 'failed_permanent'}
 FAILURE_STATES = {'failed', 'failed_permanent'}
 MAX_VALID_RETRY = 3

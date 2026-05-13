@@ -135,35 +135,35 @@ def validate_config() -> list:
     config = get_config()
     
     # 驗證 chunking 參數
-    cw = config.get('chunking', {}).get('smart_merge_window_size', 5)
-    if not (1 <= cw <= 20):
-        errors.append(f"smart_merge_window_size 必須介於 1~20，當前值：{cw}")
+    window_size = config.get('chunking', {}).get('smart_merge_window_size', 5)
+    if not (1 <= window_size <= 20):
+        errors.append(f"smart_merge_window_size 必須介於 1~20，當前值：{window_size}")
     
-    mcd = config.get('chunking', {}).get('max_chunk_duration_sec', 300)
-    if mcd < 30:
-        errors.append(f"max_chunk_duration_sec 必須 >= 30，當前值：{mcd}")
+    max_duration = config.get('chunking', {}).get('max_chunk_duration_sec', 300)
+    if max_duration < 30:
+        errors.append(f"max_chunk_duration_sec 必須 >= 30，當前值：{max_duration}")
     
-    mc = config.get('chunking', {}).get('min_chunks', 2)
-    if mc < 1:
-        errors.append(f"min_chunks 必須 >= 1，當前值：{mc}")
+    min_chunks_val = config.get('chunking', {}).get('min_chunks', 2)
+    if min_chunks_val < 1:
+        errors.append(f"min_chunks 必須 >= 1，當前值：{min_chunks_val}")
     
-    mxc = config.get('chunking', {}).get('max_chunks', 200)
-    if mxc < mc:
-        errors.append(f"max_chunks ({mxc}) 必須 >= min_chunks ({mc})")
+    max_chunks_val = config.get('chunking', {}).get('max_chunks', 200)
+    if max_chunks_val < min_chunks_val:
+        errors.append(f"max_chunks ({max_chunks_val}) 必須 >= min_chunks ({min_chunks_val})")
     
     # 驗證 embedding 參數
-    edim = config.get('embedding', {}).get('expected_dim', 3072)
-    if edim <= 0:
-        errors.append(f"expected_dim 必須 > 0，當前值：{edim}")
+    embed_dim = config.get('embedding', {}).get('expected_dim', 3072)
+    if embed_dim <= 0:
+        errors.append(f"expected_dim 必須 > 0，當前值：{embed_dim}")
     
     # 驗證 summarization 參數
-    pc = config.get('summarization', {}).get('participant_chunks', 3)
-    if pc < 1:
-        errors.append(f"participant_chunks 必須 >= 1，當前值：{pc}")
+    participant_chunks_val = config.get('summarization', {}).get('participant_chunks', 3)
+    if participant_chunks_val < 1:
+        errors.append(f"participant_chunks 必須 >= 1，當前值：{participant_chunks_val}")
     
-    mr = config.get('summarization', {}).get('max_retries', 3)
-    if mr < 0:
-        errors.append(f"max_retries 必須 >= 0，當前值：{mr}")
+    max_retries_val = config.get('summarization', {}).get('max_retries', 3)
+    if max_retries_val < 0:
+        errors.append(f"max_retries 必須 >= 0，當前值：{max_retries_val}")
     
     # 驗證路徑參數
     return errors

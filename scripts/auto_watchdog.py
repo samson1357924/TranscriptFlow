@@ -145,7 +145,6 @@ def _report_progress():
                 for item in data:
                     status = item.get('status')
                     if status == 'done': done_files += 1
-                    elif status == 'working': working_files += 1
                     elif status and status.startswith('failed'): failed_files += 1
 
                     if status == 'failed_permanent':
@@ -243,7 +242,7 @@ def _report_progress():
     }
 
 def check_and_reset_if_needed(batch_file, active_file_ids=None):
-    STUCKABLE_STATES = {'working', 'chunking', 'summarizing', 'embedding', 'db_inserting'}
+    STUCKABLE_STATES = {'chunking', 'summarizing', 'embedding', 'db_inserting'}
     try:
         with open(batch_file, 'r', encoding='utf-8') as f:
             data = _normalize_batch_data(json.load(f))
