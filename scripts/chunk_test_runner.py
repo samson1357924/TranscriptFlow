@@ -25,6 +25,7 @@ from config_loader import get_env_or_config, get_api_config, get_nested_config
 from parse_srt import parse_srt, SubtitleEntry
 from semantic_chunk import smart_merge_3_0
 from logger_config import get_logger
+from llm_client import call_llm as _call_llm
 
 logger = get_logger('chunk_test_runner')
 
@@ -66,34 +67,7 @@ def get_models(override: list = None) -> List[str]:
 
 
 def call_llm(text: str, model: str) -> dict:
-    import requests
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_KEY}",
-    }
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ],
-        "timeout": TIMEOUT_SEC,
-    }
-    resp = requests.post(
-        f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}",
-        headers=headers, json=payload, timeout=TIMEOUT_SEC + 10
-    )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"]
-    if content is None:
-        raise ValueError("LLM returned null content")
-    content = content.strip()
-    first_brace = content.find('{')
-    last_brace = content.rfind('}')
-    if first_brace == -1 or last_brace == -1 or first_brace >= last_brace:
-        raise ValueError(f"No JSON-like structure found in response: {content[:100]}")
-    json_str = content[first_brace:last_brace + 1]
-    return json.loads(json_str)
+    return _call_llm(prompt=text, model=model, system_prompt=SYSTEM_PROMPT)
 
 
 def extract_participants(chunks: List[Dict]) -> List[str]:

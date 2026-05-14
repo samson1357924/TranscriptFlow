@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from logger_config import get_logger
 from config_loader import get_api_config, get_env_or_config, get_nested_config
 from state_manager import _locked_read_write, set_status_file
+from llm_client import call_llm as _call_llm
 
 logger = get_logger('summarize_pipeline')
 
@@ -130,18 +131,11 @@ class CheckpointManager:
                             fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                             try:
                                 file_size = os.path.getsize(self.temp_file)
-                                if file_size > 0:
-                                    f.seek(0)
-                                    content = f.read().rstrip()
-                                    if content.endswith(']'):
-                                        content = content[:-1].rstrip()
-                                        if not content.endswith(','):
-                                            content += ','
-                                        f.seek(0)
-                                        f.truncate()
-                                        f.write(content)
-                                    else:
-                                        f.write(',')
+                                if file_size == 0:
+                                    f.write('[')
+                                else:
+                                    f.seek(0, 2)
+                                    f.write(',')
                                 json.dump(result, f, ensure_ascii=False)
                                 f.flush()
                                 os.fsync(f.fileno())
@@ -150,9 +144,9 @@ class CheckpointManager:
                                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                     finally:
                         fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-                    break # 成功獲取鎖，跳出重試迴圈
+                    break
             except BlockingIOError:
-                wait_time = 2**attempt # 1s, 2s, 4s
+                wait_time = 2**attempt
                 logger.debug(f"Lock busy for {chunk_id}, retrying in {wait_time}s... (attempt {attempt+1}/3)")
                 time.sleep(wait_time)
         
@@ -170,6 +164,7 @@ class CheckpointManager:
                     with open(self.temp_file, 'r', encoding='utf-8') as f:
                         content = f.read().strip()
                         if content.startswith('['):
+                            content += ']'
                             temp_results = json.loads(content)
                         else:
                             temp_results = all_results
@@ -244,38 +239,7 @@ class CheckpointManager:
 
 
 def call_llm(text: str, model: str) -> dict:
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_KEY}",
-    }
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ],
-        "timeout": TIMEOUT_SEC,
-    }
-    resp = requests.post(
-        f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}", 
-        headers=headers, 
-        json=payload, 
-        timeout=TIMEOUT_SEC + 10
-    )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"]
-    if content is None:
-        raise ValueError("LLM returned null content")
-    content = content.strip()
-    first_brace = content.find('{')
-    last_brace = content.rfind('}')
-    if first_brace == -1 or last_brace == -1 or first_brace >= last_brace:
-        raise ValueError(f"No JSON-like structure found in response: {content[:100]}")
-    json_str = content[first_brace:last_brace+1]
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"JSON parse failed: {e}")
+    return _call_llm(prompt=text, model=model, system_prompt=SYSTEM_PROMPT)
 
 
 def process_chunk(chunk: dict, stats: dict) -> dict:

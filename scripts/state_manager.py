@@ -26,7 +26,8 @@ def _locked_read_write(operation_func):
         with open(path, 'w') as f:
             json.dump([], f)
 
-    for attempt in range(3):
+    MAX_FALLBACK_ATTEMPTS = 10
+    for attempt in range(MAX_FALLBACK_ATTEMPTS):
         try:
             with open(path, 'r+') as f:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -42,20 +43,9 @@ def _locked_read_write(operation_func):
                     fcntl.flock(f, fcntl.LOCK_UN)
             return
         except BlockingIOError:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-    with open(path, 'r+') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            f.seek(0)
-            data = json.load(f)
-            new_data = operation_func(data)
-            if new_data is not None:
-                f.seek(0)
-                json.dump(new_data, f, indent=2, ensure_ascii=False)
-                f.truncate()
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+            if attempt < MAX_FALLBACK_ATTEMPTS - 1:
+                time.sleep(min(2 ** attempt, 30))
+    raise RuntimeError(f"無法取得檔案鎖定（逾時）: {path}")
 
 def load_status(file_id=None):
     path = get_status_path()

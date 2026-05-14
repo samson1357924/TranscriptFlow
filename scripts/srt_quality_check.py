@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config_loader import get_api_config, get_env_or_config, get_nested_config
 from parse_srt import parse_srt
 from logger_config import get_logger
+from llm_client import call_llm as _call_llm
 
 logger = get_logger('srt_quality_check')
 
@@ -63,19 +64,13 @@ def call_llm_for_scoring(window_text: str, start_idx: int) -> dict:
   }
 }'''
 
-    prompt = f"""你是一個字幕品質審查員。以下是某段對話字幕。
+    prompt = f"""你是一個字幕審查助手。以下是某段對話字幕。
 
-請評分（0-25 each）且只回傳 JSON：
-1. 連貫性: 語句是否流暢
-2. 邏輯合理性: 有無矛盾
-3. 語句品質: 有無錯字或轉錄錯誤
-4. 時間合理性: 時間戳是否合理
+只抓兩種問題：
+1. 內容明顯不合邏輯、前後矛盾、完全無法理解
+2. 錯字或轉錄錯誤導致文意嚴重偏離
 
-注意：
-- 這是自然對話，填充詞與不完整句子是正常的，**不要標記**
-- 只標記真正的錯字、轉錄錯誤、明顯的時間戳問題
-- flagged_entries 的 key 必須是行號數字，issue 必須以原文: 開頭引用實際存在的文字
-- 沒問題就不要列在 flagged_entries 裡
+填充詞、不完整句子、口語重複都是正常的對話特徵，請忽略。
 
 字幕：
 {window_text}
@@ -85,33 +80,15 @@ def call_llm_for_scoring(window_text: str, start_idx: int) -> dict:
     models = get_env_or_config('SRT_QUALITY_MODELS', 'srt_quality.models', None)
     if models is None:
         models = get_env_or_config('SUMMARIZATION_MODELS', 'summarization.models', ["gpt-4.1-mini"])
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
 
     for attempt in range(1, MAX_RETRIES + 1):
-        model = models[(attempt - 1) % len(models)]
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "你是一個專業的字幕品質審查員。請嚴格但公正地評估字幕品質。"},
-                {"role": "user", "content": prompt},
-            ],
-            "timeout": TIMEOUT_SEC,
-        }
         try:
-            import requests
-            resp = requests.post(f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}",
-                                 headers=headers, json=payload, timeout=TIMEOUT_SEC + 10)
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            if content is None:
-                raise ValueError("null content")
-            content = content.strip()
-            m = re.search(r'\{.*\}', content, re.DOTALL)
-            data = json.loads(m.group()) if m else json.loads(content)
+            data = _call_llm(prompt=prompt, models=models,
+                             system_prompt="你是一個專業的字幕品質審查員。請嚴格但公正地評估字幕品質。")
             # 驗證回傳格式
             flagged = data.get('flagged_entries', {})
             for key in flagged:
-                int(key)  # 非數字 key → raise ValueError
+                int(key)
             for dim in ['連貫性', '邏輯合理性', '語句品質', '時間合理性']:
                 if 'score' not in data.get('scores', {}).get(dim, {}):
                     raise ValueError(f"missing score for {dim}")
@@ -171,7 +148,7 @@ def build_windows(entries, window_size=10, stride=5):
 def format_window(entries, start_idx):
     lines = []
     for offset, e in enumerate(entries):
-        lines.append(f"[{start_idx + offset + 1}] {e.start_time} → {e.end_time}: {e.text}")
+        lines.append(f"[{offset + 1}] {e.start_time} → {e.end_time}: {e.text}")
     return '\n'.join(lines)
 
 
@@ -185,8 +162,11 @@ def aggregate_flags(windows_results: list, window_size=10, stride=5):
                 rel_idx = int(rel_idx_str) - 1
             except ValueError:
                 continue
+            if rel_idx < 0 or rel_idx >= window_size:
+                continue
             abs_idx = win_start + rel_idx
-            entry_flags[abs_idx].append(info)
+            if info not in entry_flags[abs_idx]:
+                entry_flags[abs_idx].append(info)
 
     summary = {}
     for idx, flags in entry_flags.items():

@@ -116,11 +116,8 @@ class BatchEmbeddingClient:
             time.sleep(wait_time)
         
         start_time = time.time()
-        
-        # 使用直 try/except 取代 circuit breaker 裝飾器（裝飾器與 __call__ 衝突）
-        try:
 
-            
+        def _do_request():
             url = f"{self.api_base.rstrip('/')}{self.embeddings_path}"
             payload = json.dumps({
                 "model": self.model,
@@ -130,45 +127,33 @@ class BatchEmbeddingClient:
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {self.api_key}'
             }
-            
             req = urllib.request.Request(url, data=payload, headers=headers)
-            
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 result = json.load(resp)
-                
-                # 解析 embeddings
-                embeddings = []
-                for item in result.get('data', []):
-                    vec = np.array(item['embedding'])
-                    if len(vec) != self.expected_dim:
-                        logger.warning(f"Embedding dimension mismatch: {len(vec)} != {self.expected_dim}")
-                    embeddings.append(vec)
-            
+            embeddings = []
+            for item in result.get('data', []):
+                vec = np.array(item['embedding'])
+                if len(vec) != self.expected_dim:
+                    logger.warning(f"Embedding dimension mismatch: {len(vec)} != {self.expected_dim}")
+                embeddings.append(vec)
+            return embeddings
+
+        try:
+            embeddings = self.circuit_breaker.call(_do_request)
             latency_ms = (time.time() - start_time) * 1000
             throughput = len(texts) / (latency_ms / 1000.0) if latency_ms > 0 else 0
-            
-            # 記錄成功
             avg_latency = latency_ms / len(texts) if texts else 0
             self.throttler.record_success(avg_latency)
-            
             return BatchResult(
-                success=True,
-                embeddings=embeddings,
-                latency_ms=latency_ms,
-                throughput=throughput,
-                batch_size=batch_size
+                success=True, embeddings=embeddings,
+                latency_ms=latency_ms, throughput=throughput, batch_size=batch_size
             )
-            
         except Exception as e:
             self.throttler.record_failure()
-            latency_ms = (time.time() - start_time) * 1000
-            
             return BatchResult(
-                success=False,
-                embeddings=None,
-                latency_ms=latency_ms,
-                error=str(e),
-                batch_size=batch_size
+                success=False, embeddings=None,
+                latency_ms=(time.time() - start_time) * 1000,
+                error=str(e), batch_size=batch_size
             )
     
     def generate_chunk_embeddings(

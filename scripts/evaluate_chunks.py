@@ -20,6 +20,7 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config_loader import get_api_config, get_env_or_config
 from logger_config import get_logger
+from llm_client import call_llm as _call_llm
 
 logger = get_logger('evaluate_chunks')
 
@@ -104,40 +105,19 @@ def call_llm_evaluate(chunk: dict) -> dict:
   "note": "..."
 }}"""
 
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
     models = get_env_or_config('EVALUATION_CHUNK_MODELS', 'evaluation.chunk_models', None)
     if models is None:
         models = get_env_or_config('SUMMARIZATION_MODELS', 'summarization.models', ["gpt-4.1-mini"])
 
-    for attempt in range(1, MAX_RETRIES + 1):
-        model = models[(attempt - 1) % len(models)]
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "你是專業的語意分段品質評估員。請嚴格但公正地評分。"},
-                {"role": "user", "content": prompt},
-            ],
-            "timeout": TIMEOUT_SEC,
-        }
-        try:
-            import requests
-            resp = requests.post(f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}",
-                                 headers=headers, json=payload, timeout=TIMEOUT_SEC + 10)
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            if content is None:
-                raise ValueError("null content")
-            content = content.strip()
-            m = re.search(r'\{.*\}', content, re.DOTALL)
-            data = json.loads(m.group()) if m else json.loads(content)
-            data['chunk_id'] = chunk.get('chunk_id', '')
-            data['dropped'] = is_dropped
-            return data
-        except Exception as e:
-            logger.warning(f"Evaluate chunk attempt {attempt} with {model}: {e}")
-            if attempt < MAX_RETRIES:
-                time.sleep(2 ** attempt)
-    return {"chunk_id": chunk.get('chunk_id', ''), "error": str(e)}
+    try:
+        data = _call_llm(prompt=prompt, models=models,
+                         system_prompt="你是專業的語意分段品質評估員。請嚴格但公正地評分。")
+        data['chunk_id'] = chunk.get('chunk_id', '')
+        data['dropped'] = is_dropped
+        return data
+    except Exception as e:
+        logger.warning(f"Evaluate chunk failed: {e}")
+        return {"chunk_id": chunk.get('chunk_id', ''), "error": str(e)}
 
 
 def main():
