@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.5 (2026-05-14): API Key Security, Session Pool, Atomic Writes & Code Split
+
+### 🔒 Security
+
+- **API key 從 `config.json` 移除** — `api_key` 僅存於 `.env`（`chmod 600`），由 `OPENAI_API_KEY` 環境變數提供
+- **`.env` 權限強化** — 安裝後自動設定 `600`（僅所有者可讀）
+
+### ⚡ Performance
+
+- **`requests.Session()` 連線池** — `llm_client.py` 與 `batch_embedding.py` 共用模組級 `Session()`，減少 TCP 連線建置成本
+- **`save_status()` 原子寫入** — 改為 `tempfile.NamedTemporaryFile` + `os.replace`，崩潰時不再損壞狀態檔
+- **`_locked_read_write()` 原子寫入** — 同上，分離讀取鎖與檔案寫入，寫入階段使用 tempfile + rename
+
+### 🧹 Code Quality
+
+- **`smart_merge_3_0()` 拆分為 5 個獨立函數** — `_embed_windows()`、`_compute_similarities()`、`_resolve_breakpoints()`、`_build_bp_meta()`、`_build_segments()`。主函數從 194 行降至約 25 行，每個子函數可獨立測試
+
 ## v1.4 (2026-05-14): Circuit Breaker, Lock Fix, JSON Integrity & Unified LLM Client
 
 ### 🐛 Bug Fixes
