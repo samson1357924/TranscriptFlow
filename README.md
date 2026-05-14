@@ -254,6 +254,23 @@ python3 scripts/generate_manifest.py --dry-run           # preview only
 python3 scripts/generate_manifest.py --data-dir /path --output /path/manifest.json
 ```
 
+## Unified LLM Client
+
+All LLM API calls are consolidated through `scripts/llm_client.py`:
+
+```python
+from llm_client import call_llm, get_models
+
+# Simple call
+result = call_llm(prompt="...", model="gpt-4.1-mini",
+                  system_prompt="You are a helpful assistant.")
+
+# With model fallback list
+result = call_llm(prompt="...", models=["model-a", "model-b"])
+```
+
+Features: unified retry (exponential backoff), model round-robin on retry, JSON response parsing, shared timeout and API key configuration.
+
 ## State Machine
 
 ```text

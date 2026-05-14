@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4 (2026-05-14): Circuit Breaker, Lock Fix, JSON Integrity & Unified LLM Client
+
+### 🐛 Bug Fixes
+
+- **`batch_embedding.py`: CircuitBreaker bypassed** — `generate_batch_embeddings()` 直接 try/except 跳過熔斷器，已改為提取 `_do_request()` 內層函數，透過 `self.circuit_breaker.call()` 保護 API 呼叫
+- **`summarize_pipeline.py`: checkpoint JSON 損壞** — `write_chunk_result()` 第一個 chunk 寫入時缺少 `[` 陣列括號。已修正：首筆寫 `[` + JSON，後續寫 `,` + JSON，`finalize()` 讀取時補 `]`
+- **`state_manager.py`: blocking lock 無 timeout** — `_locked_read_write()` 3 次 `LOCK_NB` 失敗後 fallback 到阻塞鎖，可永久卡死。已改為 LOCK_NB 重試 10 次（間隔逐次遞增，max 30s），逾時拋 `RuntimeError`
+
+### 🔧 Improvements
+
+- **`scripts/llm_client.py` — 統一 LLM 客戶端** — 新增共用模組，提供 `call_llm()` 與 `get_models()`，消除 5 個檔案（`summarize_pipeline.py`、`chunk_test_runner.py`、`evaluate_chunks.py`、`evaluate_summary_fidelity.py`、`srt_quality_check.py`）中重複的 LLM 呼叫實作，淨減 62 行程式碼
+- **`.env.example` 清理** — 移除已廢棄的 `SUMMARIZATION_MODELS`，加註說明改由 `config.json` 管理
+
 ## v1.3 (2026-05-14): Parallel Quality Check, Evaluation Model Config & Code Cleanup
 
 ### 🚀 New Features
