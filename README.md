@@ -24,6 +24,8 @@ TranscriptFlow is built to demonstrate production-oriented AI pipeline design ra
 - chunk-level retries that preserve successful work
 - model-level diagnostics for throughput, latency, failures, and error distribution
 - atomic checkpoint writes for long-running summarization jobs
+- fail-closed validation for partial summaries, partial embeddings, and mismatched DB records
+- idempotent LanceDB writes keyed by stable file and chunk identifiers
 - adaptive embedding batching with circuit-breaker protection
 - audit tooling for data integrity, stale jobs, and cross-file consistency
 
@@ -63,6 +65,9 @@ TranscriptFlow is not a one-click archival tool and does not download videos for
 - **Smart Merge 3.0 semantic chunking**: overlapping subtitle windows, embedding cosine similarity, percentile breakpoints, minimum-span validation, and noise filtering.
 - **Four-phase pipeline**: chunking, summarization, embedding, and LanceDB insertion.
 - **Chunk & retry tracking**: chunk-level retries that preserve successful work, per-model diagnostics.
+- **Checkpoint-safe resumability**: completed summaries are reused only when the source chunk text hash still matches.
+- **Fail-closed writes**: partial summarization, partial embedding responses, invalid vectors, and incompatible LanceDB schemas stop the pipeline instead of silently dropping records.
+- **Idempotent vector indexing**: LanceDB writes use stable `file_id` and `chunk_id` fields with merge-upsert semantics to avoid duplicate rows on reruns.
 - **Watchdog automation**: scans batch status files, advances eligible work, resets timed-out jobs, and manages phase concurrency.
 - **OpenAI-compatible API**: works with OpenAI, LiteLLM Proxy, OpenRouter, vLLM, etc.
 
@@ -136,6 +141,33 @@ python3 scripts/auto_watchdog.py
 ```
 
 > **Note**: Use `set -a && source .env && set +a` instead of `export $(grep -v '^#' .env | xargs)` to avoid shell stripping double quotes from JSON values.
+
+## Validation
+
+Run the local regression suite before changing pipeline behavior:
+
+```bash
+.venv/bin/pytest -q
+.venv/bin/python -m compileall -q scripts tests
+```
+
+The regression tests cover config loading, Smart Merge small-file output shape, status-file sidecar locking, checkpoint resume safety, partial summarization blocking, embedding response validation, record validation, and LanceDB merge-upsert idempotency.
+
+For a live end-to-end check, initialize a small batch, point outputs to a disposable directory, and run each phase:
+
+```bash
+set -a && source .env && set +a
+export SRT_OUTPUT_DIR="$PWD/output/live_validation"
+export SRT_DB_PATH="$PWD/output/live_validation_db"
+
+python3 scripts/state_manager.py init_batch 1 2
+python3 scripts/summarize.py --id 1 --batch "$SRT_OUTPUT_DIR/batch_status_1_2.json" --phase chunking
+python3 scripts/summarize.py --id 1 --batch "$SRT_OUTPUT_DIR/batch_status_1_2.json" --phase summarizing
+python3 scripts/summarize.py --id 1 --batch "$SRT_OUTPUT_DIR/batch_status_1_2.json" --phase embedding
+python3 scripts/summarize.py --id 1 --batch "$SRT_OUTPUT_DIR/batch_status_1_2.json" --phase db_inserting
+```
+
+Repeat the phase commands for another file id when validating multi-file behavior. A successful DB validation should show one row per unique `chunk_id`, not duplicate rows after reruns.
 
 ## Test Pipeline (方案 A — Single Run)
 

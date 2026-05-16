@@ -131,8 +131,10 @@ class BatchEmbeddingClient:
             for item in result.get('data', []):
                 vec = np.array(item['embedding'])
                 if len(vec) != self.expected_dim:
-                    logger.warning(f"Embedding dimension mismatch: {len(vec)} != {self.expected_dim}")
+                    raise ValueError(f"Embedding dimension mismatch: {len(vec)} != {self.expected_dim}")
                 embeddings.append(vec)
+            if len(embeddings) != len(texts):
+                raise ValueError(f"Embedding count mismatch: got {len(embeddings)}, expected {len(texts)}")
             return embeddings
 
         try:

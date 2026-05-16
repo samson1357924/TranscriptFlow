@@ -5,6 +5,7 @@ import argparse
 import shutil
 import tempfile
 import fcntl
+import math
 from datetime import datetime
 from typing import List, Dict, Tuple
 import pyarrow as pa
@@ -39,13 +40,13 @@ EXPECTED_DIM = get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_d
 
 
 def deduplicate_records(records: List[Dict]) -> List[Dict]:
-    """按語意去重:file_name + start_time 是 semantic chunk 的唯一主鍵。
-    若同一 SRT 文件中同一時間點重複 chunk,則只保留第一次產生的那條記錄。
+    """按穩定 chunk_id 去重。
+    舊版以 file_name + start_time 去重，標題或時間重疊時可能誤刪合法 chunk。
     """
     seen = set()
     deduped = []
     for rec in records:
-        key = (rec['file_name'], rec['start_time'])
+        key = rec.get('chunk_id') or (rec['file_name'], rec['start_time'])
         if key not in seen:
             seen.add(key)
             deduped.append(rec)
@@ -56,10 +57,81 @@ def deduplicate_records(records: List[Dict]) -> List[Dict]:
     return deduped
 
 
+def _escape_sql_literal(value: str) -> str:
+    return str(value).replace("'", "''")
+
+
+def _validate_records(records: List[Dict]) -> Tuple[bool, str]:
+    required = {
+        "chunk_id", "file_id", "file_name", "start_time", "end_time", "summary", "text_content",
+        "tags", "participants", "vector", "boundary_type"
+    }
+    string_fields = {"chunk_id", "file_name", "start_time", "end_time", "summary", "text_content", "boundary_type"}
+    for idx, rec in enumerate(records):
+        missing = sorted(required - set(rec))
+        if missing:
+            return False, f"Record {idx} missing fields: {missing}"
+        if not isinstance(rec["file_id"], int):
+            return False, f"Record {idx} file_id must be an integer"
+        for field in string_fields:
+            if not isinstance(rec[field], str):
+                return False, f"Record {idx} {field} must be a string"
+        if not isinstance(rec["tags"], list) or not all(isinstance(x, str) for x in rec["tags"]):
+            return False, f"Record {idx} tags must be a list of strings"
+        if not isinstance(rec["participants"], list) or not all(isinstance(x, str) for x in rec["participants"]):
+            return False, f"Record {idx} participants must be a list of strings"
+        vector = rec["vector"]
+        if not isinstance(vector, list) or len(vector) != EXPECTED_DIM:
+            return False, f"Record {idx} vector dimension mismatch: {len(vector) if isinstance(vector, list) else 'not-list'} != {EXPECTED_DIM}"
+        if not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in vector):
+            return False, f"Record {idx} vector contains non-finite or non-numeric values"
+    return True, "ok"
+
+
+def _required_schema() -> pa.Schema:
+    return pa.schema([
+        ("chunk_id", pa.string()),
+        ("file_id", pa.int64()),
+        ("file_name", pa.string()),
+        ("start_time", pa.string()),
+        ("end_time", pa.string()),
+        ("summary", pa.string()),
+        ("text_content", pa.string()),
+        ("tags", pa.list_(pa.string())),
+        ("participants", pa.list_(pa.string())),
+        ("vector", pa.list_(pa.float32(), EXPECTED_DIM)),
+        ("boundary_type", pa.string())
+    ])
+
+
+def _schema_field_names(schema) -> set:
+    return {field.name for field in schema}
+
+
+def _preflight_table_schema(table) -> Tuple[bool, str]:
+    try:
+        existing_schema = table.schema
+        if callable(existing_schema):
+            existing_schema = existing_schema()
+    except Exception as exc:
+        return False, f"Unable to inspect existing table schema: {exc}"
+
+    existing_fields = _schema_field_names(existing_schema)
+    required_fields = _schema_field_names(_required_schema())
+    missing = sorted(required_fields - existing_fields)
+    if missing:
+        return False, f"Existing LanceDB table schema is missing fields {missing}; run a migration before idempotent write"
+    return True, "ok"
+
+
 def write_to_db(records: List[Dict]) -> Tuple[bool, str]:
     records = deduplicate_records(records)
     if not records:
         return True, "No records to write"
+
+    ok, validation_msg = _validate_records(records)
+    if not ok:
+        return False, validation_msg
 
     os.makedirs(DB_FINAL, exist_ok=True)
     try:
@@ -68,26 +140,24 @@ def write_to_db(records: List[Dict]) -> Tuple[bool, str]:
         table_names = raw.tables
 
         if TABLE_NAME not in table_names:
-            schema = pa.schema([
-                ("file_name", pa.string()),
-                ("start_time", pa.string()),
-                ("end_time", pa.string()),
-                ("summary", pa.string()),
-                ("text_content", pa.string()),
-                ("tags", pa.list_(pa.string())),
-                ("participants", pa.list_(pa.string())),
-                ("vector", pa.list_(pa.float32(), EXPECTED_DIM)),
-                ("boundary_type", pa.string())
-            ])
-            db.create_table(TABLE_NAME, schema=schema)
-
-        dims = set(len(r['vector']) for r in records)
-        if dims != {EXPECTED_DIM}:
-            return False, f"Vector dimension mismatch: found {dims}, expected {{{EXPECTED_DIM}}}."
+            db.create_table(TABLE_NAME, schema=_required_schema())
 
         table = db.open_table(TABLE_NAME)
-        table.add(records)
-        logger.info(f"LanceDB append: {len(records)} records")
+        ok, schema_msg = _preflight_table_schema(table)
+        if not ok:
+            return False, schema_msg
+
+        file_ids = sorted({r["file_id"] for r in records})
+        conditions = [f"file_id = {file_id}" for file_id in file_ids]
+        delete_condition = " OR ".join(conditions)
+        (
+            table.merge_insert("chunk_id")
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .when_not_matched_by_source_delete(delete_condition)
+            .execute(records)
+        )
+        logger.info(f"LanceDB merge upsert: {len(records)} records")
         return True, f"Written {len(records)} records to {TABLE_NAME}"
     except Exception as e:
         return False, str(e)

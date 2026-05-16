@@ -7,8 +7,8 @@ import re
 import fcntl
 import tempfile
 
-# 優先從環境變數讀取專案根目錄
-PROJECT_ROOT = os.environ.get('SRT_PROJECT_ROOT', os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+# 優先從環境變數讀取專案根目錄，預設為 scripts/ 的上一層。
+PROJECT_ROOT = os.environ.get('SRT_PROJECT_ROOT', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 預設狀態檔位置
 STATUS_FILE = os.environ.get('BATCH_STATUS_FILE', os.path.join(PROJECT_ROOT, 'file_manifest_status.json'))
 
@@ -24,30 +24,51 @@ def set_status_file(filename):
 def _locked_read_write(operation_func):
     path = get_status_path()
     if not os.path.exists(path):
+        dir_path = os.path.dirname(path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
         with open(path, 'w') as f:
             json.dump([], f)
 
     MAX_FALLBACK_ATTEMPTS = 10
+    lock_path = path + '.lock'
     for attempt in range(MAX_FALLBACK_ATTEMPTS):
+        tmp_path = None
+        lock_f = None
         try:
-            with open(path, 'r') as f:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                try:
+            lock_f = open(lock_path, 'w')
+            fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    f.seek(0)
                     data = json.load(f)
-                    new_data = operation_func(data)
-                finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-            if new_data is not None:
-                dir_path = os.path.dirname(path) or '.'
-                with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
-                                                 prefix='.status_tmp_', suffix='.json') as tf:
-                    tmp_path = tf.name
-                    json.dump(new_data, tf, indent=2, ensure_ascii=False)
-                os.replace(tmp_path, path)
+                new_data = operation_func(data)
+                if new_data is not None:
+                    dir_path = os.path.dirname(path) or '.'
+                    with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
+                                                     prefix='.status_tmp_', suffix='.json') as tf:
+                        tmp_path = tf.name
+                        json.dump(new_data, tf, indent=2, ensure_ascii=False)
+                        tf.flush()
+                        os.fsync(tf.fileno())
+                    os.replace(tmp_path, path)
+                    tmp_path = None
+            finally:
+                fcntl.flock(lock_f, fcntl.LOCK_UN)
             return
         except BlockingIOError:
             if attempt < MAX_FALLBACK_ATTEMPTS - 1:
                 time.sleep(min(2 ** attempt, 30))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"狀態檔 JSON 格式錯誤: {path}") from exc
+        finally:
+            if lock_f is not None:
+                lock_f.close()
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
     raise RuntimeError(f"無法取得檔案鎖定（逾時）: {path}")
 
 def load_status(file_id=None):
@@ -77,6 +98,7 @@ def save_status(data):
 
 # ── 相位並發控制 ──────────────────────────────────────────────────────────
 _PHASE_SLOTS_FILE = None
+_PHASE_SLOTS_LOCK_FILE = None
 
 def _get_phase_concurrency():
     return get_nested_config('phase_concurrency', {
@@ -94,61 +116,64 @@ def _get_phase_slots_file():
         _PHASE_SLOTS_FILE = os.path.join(output_dir, '.phase_slots.json')
     return _PHASE_SLOTS_FILE
 
+def _get_phase_slots_lock_file():
+    global _PHASE_SLOTS_LOCK_FILE
+    if _PHASE_SLOTS_LOCK_FILE is None:
+        output_dir = os.environ.get('SRT_OUTPUT_DIR',
+            get_nested_config('paths.output_dir', './output'))
+        _PHASE_SLOTS_LOCK_FILE = os.path.join(output_dir, '.phase_slots.lock')
+    return _PHASE_SLOTS_LOCK_FILE
+
+def _atomic_update_phase_slots(path, update_fn):
+    lock_path = _get_phase_slots_lock_file()
+    for attempt in range(3):
+        lock_f = None
+        try:
+            lock_f = open(lock_path, 'w')
+            fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                with open(path, 'r') as f:
+                    slots = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                slots = {}
+            new_slots = update_fn(slots)
+            if new_slots is False:
+                return False
+            dir_path = os.path.dirname(path) or '.'
+            os.makedirs(dir_path, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
+                                             prefix='.phase_slots_tmp_', suffix='.json') as tf:
+                tmp_path = tf.name
+                json.dump(new_slots, tf, indent=2)
+            os.replace(tmp_path, path)
+            return True
+        except BlockingIOError:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            return False
+        except Exception:
+            return False
+        finally:
+            if lock_f is not None:
+                try:
+                    fcntl.flock(lock_f, fcntl.LOCK_UN)
+                    lock_f.close()
+                except Exception:
+                    pass
+    return False
 
 def acquire_phase_slot(file_id, phase):
     concurrency = _get_phase_concurrency()
     max_slots = concurrency.get(phase, 1)
     path = _get_phase_slots_file()
-    # Ensure file exists with valid content
-    if not os.path.exists(path):
-        with open(path, 'w') as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            try:
-                json.dump({}, f)
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
-    for attempt in range(3):
-        try:
-            with open(path, 'r+') as f:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                try:
-                    f.seek(0)
-                    content = f.read().strip()
-                    slots = json.loads(content) if content else {}
-                    if slots.get(phase, 0) < max_slots:
-                        slots[phase] = slots.get(phase, 0) + 1
-                        f.seek(0)
-                        f.truncate()
-                        json.dump(slots, f, indent=2)
-                        return True
-                    return False
-                finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-        except BlockingIOError:
-            time.sleep(2 ** attempt)
-    return False
+    return _atomic_update_phase_slots(path, lambda slots:
+        {**slots, phase: slots.get(phase, 0) + 1} if slots.get(phase, 0) < max_slots else False)
 
 def release_phase_slot(phase):
     path = _get_phase_slots_file()
-    if not os.path.exists(path):
-        return
-    for attempt in range(3):
-        try:
-            with open(path, 'r+') as f:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                try:
-                    f.seek(0)
-                    content = f.read().strip()
-                    slots = json.loads(content) if content else {}
-                    slots[phase] = max(0, slots.get(phase, 0) - 1)
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(slots, f, indent=2)
-                    return
-                finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-        except BlockingIOError:
-            time.sleep(2 ** attempt)
+    _atomic_update_phase_slots(path, lambda slots:
+        {**slots, phase: max(0, slots.get(phase, 0) - 1)})
 
 # 基礎路徑配置
 # 從 config_loader 讀取路徑配置

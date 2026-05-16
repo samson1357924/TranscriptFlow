@@ -14,6 +14,8 @@ import shutil
 from datetime import datetime
 import time
 import threading
+import glob
+import hashlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from logger_config import get_logger
@@ -74,31 +76,60 @@ class CheckpointManager:
         self.lock_file = output_file + '.lock'
         self.completed_chunks = {}
         self._ensure_checkpoint_dir()
+
+    @staticmethod
+    def chunk_fingerprint(chunk: dict) -> str:
+        text = chunk.get("text_content", "")
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
     
     def _ensure_checkpoint_dir(self):
         if not os.path.exists(self.checkpoint_dir):
             os.makedirs(self.checkpoint_dir, exist_ok=True)
     
     def load_existing_results(self) -> dict:
+        loaded_results = []
         if os.path.exists(self.output_file):
             try:
                 with open(self.output_file, 'r', encoding='utf-8') as f:
-                    results = json.load(f)
-                    self.completed_chunks = {
-                        r.get('chunk_id', r.get('id')): r 
-                        for r in results 
-                        if r.get('chunk_id', r.get('id'))
-                    }
-                    logger.info(f"從現有檔案載入 {len(self.completed_chunks)} 個已完成 chunks")
+                    loaded_results.extend(json.load(f))
             except json.JSONDecodeError:
                 logger.warning("現有輸出檔案 JSON 格式錯誤，將重新處理")
-                self.completed_chunks = {}
             except Exception as e:
                 logger.warning(f"載入現有結果失敗: {e}，將重新處理")
-                self.completed_chunks = {}
+
+        checkpoint_pattern = os.path.join(os.path.dirname(self.output_file) or '.', 'checkpoint_*.tmp')
+        for checkpoint_path in sorted(glob.glob(checkpoint_pattern), key=os.path.getmtime, reverse=True):
+            try:
+                with open(checkpoint_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                if not content:
+                    continue
+                if content.startswith('[') and not content.endswith(']'):
+                    content += ']'
+                checkpoint_results = json.loads(content)
+                if isinstance(checkpoint_results, list):
+                    loaded_results.extend(checkpoint_results)
+                    logger.info(f"從暫存 checkpoint 載入 {len(checkpoint_results)} 個 chunks: {checkpoint_path}")
+                    break
+            except Exception as e:
+                logger.debug(f"略過不可讀 checkpoint {checkpoint_path}: {e}")
+
+        self.completed_chunks = {
+            r.get('chunk_id', r.get('id')): r
+            for r in loaded_results
+            if r.get('chunk_id', r.get('id')) and r.get('status') == 'done'
+        }
+        if self.completed_chunks:
+            logger.info(f"從既有結果載入 {len(self.completed_chunks)} 個已完成 chunks")
         return self.completed_chunks
     
     def get_pending_chunks(self, all_chunks: list) -> list:
+        for chunk in all_chunks:
+            chunk_id = chunk.get('chunk_id', chunk.get('id'))
+            existing = self.completed_chunks.get(chunk_id)
+            if existing and existing.get("source_text_hash") != self.chunk_fingerprint(chunk):
+                logger.warning(f"Chunk {chunk_id} text changed; ignoring stale completed result")
+                self.completed_chunks.pop(chunk_id, None)
         pending = [
             chunk for chunk in all_chunks 
             if chunk.get('chunk_id', chunk.get('id')) not in self.completed_chunks
@@ -168,11 +199,17 @@ class CheckpointManager:
                             temp_results = json.loads(content)
                         else:
                             temp_results = all_results
-                except:
+                except Exception:
+                    logger.debug("無法讀取暫存結果，使用 all_results")
                     temp_results = all_results
                 
-                final_results = temp_results if temp_results else all_results
+                final_results = list(all_results)
                 final_result_ids = {r.get('chunk_id', r.get('id')) for r in final_results}
+                for result in temp_results:
+                    chunk_id = result.get('chunk_id', result.get('id'))
+                    if chunk_id and chunk_id not in final_result_ids:
+                        final_results.append(result)
+                        final_result_ids.add(chunk_id)
                 for chunk_id, result in self.completed_chunks.items():
                     if chunk_id not in final_result_ids:
                         final_results.append(result)
@@ -207,12 +244,12 @@ class CheckpointManager:
                 if os.path.exists(self.lock_file):
                     try:
                         os.remove(self.lock_file)
-                    except:
+                    except Exception:
                         pass
                 if os.path.exists(self.temp_file):
                     try:
                         os.remove(self.temp_file)
-                    except:
+                    except Exception:
                         pass
                 self.temp_file = None
         else:
@@ -222,7 +259,7 @@ class CheckpointManager:
         if os.path.exists(self.lock_file):
             try:
                 os.remove(self.lock_file)
-            except:
+            except Exception:
                 pass
     
     def __enter__(self):
@@ -234,7 +271,7 @@ class CheckpointManager:
             try:
                 if os.path.exists(self.temp_file):
                     os.remove(self.temp_file)
-            except:
+            except Exception:
                 pass
 
 
@@ -262,6 +299,7 @@ def process_chunk(chunk: dict, stats: dict) -> dict:
             stats["model_stats"][model] += 1
             return {**chunk, "summary": summary, "tags": tags, "status": "done",
                     "model_used": model, "retry_count": attempt - 1, "errors": errors,
+                    "source_text_hash": CheckpointManager.chunk_fingerprint(chunk),
                     "elapsed_sec": round(elapsed, 2), "elapsed_total_sec": round(elapsed_total, 2),
                     "char_count": len(chunk.get("text_content", ""))}
         except Exception as exc:
@@ -274,11 +312,13 @@ def process_chunk(chunk: dict, stats: dict) -> dict:
                 stats["failed"] += 1
                 elapsed_total = time.time() - start_time
                 return {**chunk, "status": "failed", "errors": errors, "retry_count": MAX_RETRIES,
+                        "source_text_hash": CheckpointManager.chunk_fingerprint(chunk),
                         "elapsed_sec": round(elapsed, 2), "elapsed_total_sec": round(elapsed_total, 2),
                         "char_count": len(chunk.get("text_content", ""))}
     elapsed_total = time.time() - start_time
     return {**chunk, "status": "failed", "errors": [{"model": "unknown", "message": "unexpected"}],
-            "retry_count": MAX_RETRIES, "elapsed_sec": 0, "elapsed_total_sec": round(elapsed_total, 2),
+            "retry_count": MAX_RETRIES, "source_text_hash": CheckpointManager.chunk_fingerprint(chunk),
+            "elapsed_sec": 0, "elapsed_total_sec": round(elapsed_total, 2),
             "char_count": len(chunk.get("text_content", ""))}
 
 
@@ -392,6 +432,13 @@ def main(input_file: str, output_file: str, batch_file: str = None):
     
     if not pending_chunks:
         logger.info("所有 chunks 已完成處理，無須重複執行")
+        checkpoint_manager.finalize(list(checkpoint_manager.completed_chunks.values()))
+        save_detailed_stats(output_file, list(checkpoint_manager.completed_chunks.values()), {
+            "success": len(checkpoint_manager.completed_chunks),
+            "failed": 0,
+            "model_stats": {},
+            "error_distribution": {},
+        })
         return
     
     stats = {"success": 0, "failed": 0, "model_stats": {}, "error_distribution": {}}
@@ -402,7 +449,8 @@ def main(input_file: str, output_file: str, batch_file: str = None):
     if batch_file:
         try:
             _file_id = int(os.path.basename(input_file).split('_')[0])
-        except:
+        except Exception:
+            logger.debug(f"無法從 {input_file} 解析 file_id")
             pass
 
     checkpoint_manager.start_incremental_write()
@@ -417,7 +465,8 @@ def main(input_file: str, output_file: str, batch_file: str = None):
                 if _file_id is not None:
                     try:
                         _incremental_write_chunk(batch_file, _file_id, result)
-                    except:
+                    except Exception:
+                        logger.debug(f"增量寫入失敗: {_file_id} {result.get('chunk_id', '?')}")
                         pass
     finally:
         checkpoint_manager.finalize(results)

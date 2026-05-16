@@ -272,7 +272,7 @@ def sanitize_api_url(url: str) -> tuple[bool, str]:
                     if (ip.startswith('10.') or ip.startswith('172.') or 
                         ip.startswith('192.168.') or ip.startswith('127.')):
                         return True, f"URL 合法 (DNS 解析為內部 IP: {ip})"
-                except:
+                except Exception:
                     pass  # DNS 解析失敗，繼續檢查原始 host_part
                 
                 return False, f"❌ 安全阻止：HTTP 連接至外部網路 ({host_part}) 不被允許。請使用 HTTPS 或確認這是內部 IP。"

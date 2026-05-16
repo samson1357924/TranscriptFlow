@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.6 (2026-05-16): Pipeline Recovery, Idempotent Writes & Live Validation
+
+### Reliability
+
+- **Status writes use a sidecar lock file** — `_locked_read_write()` now locks a stable `.lock` file instead of the JSON file that is replaced by `os.replace()`, preventing stale-inode lost updates under concurrent workers.
+- **Phase slot writes are atomic** — phase concurrency counters now use a sidecar lock plus tempfile replacement.
+- **Project root detection fixed** — script defaults now resolve to the repository root instead of walking above the checkout in direct import scenarios.
+
+### Recovery & Fail-Closed Behavior
+
+- **Summarization resume is content-aware** — completed chunk summaries include `source_text_hash`; stale cached summaries are ignored when source chunk text changes.
+- **Partial summarization is blocked** — any failed chunk in a summary output prevents the embedding phase from continuing.
+- **Checkpoint finalization preserves failed chunks** — final output now keeps both successful and failed results so downstream validation can detect partial failure.
+- **Embedding validation is strict** — batch embedding responses fail closed when vector dimensions mismatch or the API returns fewer embeddings than requested.
+
+### LanceDB Integrity
+
+- **Stable record identity** — records now include `file_id` and `chunk_id`.
+- **Schema preflight** — LanceDB writes validate required fields, vector shape, finite values, and existing table schema before writing.
+- **Idempotent merge-upsert** — DB insertion uses `merge_insert("chunk_id")` instead of append-only writes or title-based delete/add.
+- **Chunk-centric deduplication** — duplicate filtering now prefers `chunk_id`, avoiding accidental drops when titles or start times collide.
+
+### Validation
+
+- Added regression coverage for Smart Merge output shape, status-file locking, checkpoint resume, partial summarization blocking, embedding partial-response failure, record validation, and LanceDB upsert idempotency.
+- Live validation completed for file IDs 1 and 2:
+  - ID 1: 43 chunks summarized, embedded, and written.
+  - ID 2: 32 chunks summarized, embedded, and written.
+  - LanceDB validation: 75 rows, 75 unique chunk IDs.
+
 ## v1.5 (2026-05-14): API Key Security, Session Pool, Atomic Writes & Code Split
 
 ### 🔒 Security

@@ -50,6 +50,10 @@
     "phase3_embedding": 1,
     "phase4_db_insert": 1
   },
+  "chunk_test": {
+    "_comment": "chunk_test_runner.py 並行參數",
+    "concurrency": 5
+  },
   "srt_quality": {
     "_comment": "SRT 字幕品質檢查參數",
     "concurrency": 5,

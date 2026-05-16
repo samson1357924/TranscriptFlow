@@ -20,7 +20,7 @@ from state_manager import update_state, load_status, set_status_file, _locked_re
 
 logger = get_logger('summarize')
 
-PROJECT_ROOT = os.getenv('SRT_PROJECT_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+PROJECT_ROOT = os.getenv('SRT_PROJECT_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # 使用當前 python3 直譯器（不再依賴特定 venv 路徑）
 PYTHON_EXE = 'python3'
 
@@ -259,8 +259,7 @@ def phase_summarizing(file_id, batch_file):
     if not os.path.exists(chunk_file):
         raise RuntimeError(f"Chunk file not found: {chunk_file}")
     if os.path.exists(summarized_fn):
-        os.remove(summarized_fn)
-        logger.info(f"[{file_id}] Removed stale output: {summarized_fn}")
+        logger.info(f"[{file_id}] Reusing existing summary output for checkpoint resume: {summarized_fn}")
 
     pipeline_script = os.path.join(os.path.dirname(__file__), 'summarize_pipeline.py')
     cmd = [PYTHON_EXE, pipeline_script, "--input", chunk_file, "--output", summarized_fn]
@@ -276,11 +275,19 @@ def phase_summarizing(file_id, batch_file):
 
     with open(summarized_fn, 'r', encoding='utf-8') as f:
         summarized_data = json.load(f)
+    _validate_summarized_results(file_id, summarized_data)
     done_count = sum(1 for ch in summarized_data if ch.get('status') == 'done')
-    if done_count == 0:
-        raise RuntimeError(f"All {len(summarized_data)} chunks failed summarization")
 
     logger.info(f"[{file_id}] Phase 2 (summarizing) complete: {done_count}/{len(summarized_data)} chunks done")
+
+
+def _validate_summarized_results(file_id, summarized_data):
+    done_count = sum(1 for ch in summarized_data if ch.get('status') == 'done')
+    failed_count = sum(1 for ch in summarized_data if ch.get('status') in ('failed', 'failed_permanent'))
+    if done_count == 0:
+        raise RuntimeError(f"All {len(summarized_data)} chunks failed summarization")
+    if failed_count:
+        raise RuntimeError(f"{failed_count}/{len(summarized_data)} chunks failed summarization; blocking next phase")
 
 
 def phase_embedding(file_id, batch_file):
@@ -304,17 +311,22 @@ def phase_embedding(file_id, batch_file):
 
     records = []
     total = len([ch for ch in summarized_data if ch.get('status') == 'done' and ch.get('summary', '').strip()])
+    skipped_done = 0
     for idx, ch in enumerate(summarized_data):
         if ch.get('status') != 'done':
             continue
         summary = ch['summary']
         if not summary or not summary.strip():
+            skipped_done += 1
             continue
         vector = generate_embedding_local(summary)
         if vector is None:
+            skipped_done += 1
             continue
         vector = vector.tolist()
         records.append({
+            "chunk_id": ch.get("chunk_id", f"{file_id}_{idx}"),
+            "file_id": file_id,
             "file_name": title,
             "start_time": ch['start_time'],
             "end_time": ch['end_time'],
@@ -341,6 +353,9 @@ def phase_embedding(file_id, batch_file):
     records_file = os.path.join(output_dir, f"{file_id}_records.json")
     with open(records_file, 'w', encoding='utf-8') as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
+
+    if len(records) != total:
+        raise RuntimeError(f"[{file_id}] Embedding incomplete: {len(records)}/{total} records generated ({skipped_done} skipped)")
 
     logger.info(f"[{file_id}] Phase 3 (embedding) complete: {len(records)} records")
 
@@ -398,7 +413,8 @@ def phase_db_inserting(file_id, batch_file):
                     if started_at:
                         try:
                             elapsed = (datetime.now() - datetime.fromisoformat(started_at)).total_seconds()
-                        except: pass
+                        except Exception:
+                            logger.exception("解析 started_at 時間戳失敗")
 
                     model_stats.clear()
                     for ch in chunks_data:

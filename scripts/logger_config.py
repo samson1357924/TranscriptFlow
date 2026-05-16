@@ -31,7 +31,7 @@ class SensitiveDataFilter(logging.Filter):
             with open(cfg_path, 'r') as f:
                 cfg = json.load(f)
                 api_key = cfg.get('api', {}).get('api_key', '')
-        except:
+        except Exception:
             pass
         # Fallback 到環境變數
         if not api_key:
