@@ -40,6 +40,8 @@ def main():
         if not summary or not summary.strip():
             continue
         records.append({
+            "chunk_id": ch.get("chunk_id", f"{args.id}_{len(records)}"),
+            "file_id": args.id,
             "file_name": f"file_{args.id}",
             "start_time": ch.get('start_time', ''),
             "end_time": ch.get('end_time', ''),

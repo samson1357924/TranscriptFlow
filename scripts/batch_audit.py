@@ -81,7 +81,7 @@ def _sec_ago(ts):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - dt).total_seconds()
-    except:
+    except Exception:
         return None
 
 
@@ -133,7 +133,7 @@ def audit_schema(items, batch_file):
         if ts:
             try:
                 datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            except:
+            except Exception:
                 issues.append({"severity": "WARN", "check": "A3", "file_id": fid, "msg": f"Invalid timestamp: {ts}"})
         else:
             issues.append({"severity": "WARN", "check": "A3", "file_id": fid, "msg": "Missing last_updated"})
@@ -770,7 +770,7 @@ def main():
                     output_dir = cfg.get('paths', {}).get('output_dir', '')
                     if output_dir:
                         break
-        except:
+        except Exception:
             pass
     if not output_dir:
         output_dir = './output'
@@ -789,7 +789,7 @@ def main():
                     master_file = cfg.get('paths', {}).get('master_file', '')
                     if master_file:
                         break
-        except:
+        except Exception:
             pass
     if not master_file:
         master_file = './examples/master_file_manifest.example.json'

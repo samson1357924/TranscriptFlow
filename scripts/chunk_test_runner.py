@@ -18,6 +18,8 @@ import time
 import re
 from datetime import datetime
 from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -268,6 +270,8 @@ def main():
                         help='JSON 字串，覆蓋 chunking 參數')
     parser.add_argument('--models', type=str, default=None,
                         help='JSON 陣列，指定 summarization models')
+    parser.add_argument('--concurrency', type=int, default=None,
+                        help='並行摘要數（預設從 config.json 讀取）')
     args = parser.parse_args()
 
     # 1. 載入 manifest
@@ -287,6 +291,9 @@ def main():
     if args.models:
         models = json.loads(args.models)
         logger.info(f"Models overridden: {models}")
+
+    concurrency = args.concurrency or get_env_or_config(
+        'CHUNK_TEST_CONCURRENCY', 'chunk_test.concurrency', 1)
 
     # 3. 解析 SRT
     logger.info("解析 SRT...")
@@ -321,11 +328,19 @@ def main():
     participants = extract_participants(kept_chunks)
     logger.info(f"參與者: {participants}")
 
-    # 6. 摘要每個 chunk
-    logger.info(f"開始摘要 {len(kept_chunks)} 個 chunks（{len(models)} 個模型輪循）...")
-    for idx, ch in enumerate(kept_chunks, 1):
-        logger.info(f"  [{idx}/{len(kept_chunks)}] {ch['chunk_id']}...")
-        summarize_chunk(ch, models)
+    # 6. 摘要每個 chunk（並行）
+    logger.info(f"開始摘要 {len(kept_chunks)} 個 chunks（並行 {concurrency}，{len(models)} 個模型輪循）...")
+    lock = threading.Lock()
+    done_count = [0]
+    total = len(kept_chunks)
+    with ThreadPoolExecutor(max_workers=concurrency) as ex:
+        futures = {ex.submit(summarize_chunk, ch, models): ch for ch in kept_chunks}
+        for fut in as_completed(futures):
+            ch = futures[fut]
+            with lock:
+                done_count[0] += 1
+                status = fut.result().get('status', '?')
+                logger.info(f"  [{done_count[0]}/{total}] {ch['chunk_id']} ({status})")
 
     done_count = sum(1 for ch in kept_chunks if ch.get('status') == 'done')
     failed_count = sum(1 for ch in kept_chunks if ch.get('status') == 'failed')

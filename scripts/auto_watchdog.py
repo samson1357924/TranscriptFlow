@@ -66,17 +66,24 @@ def _check_environment():
     logger.info(f"✅ API 配置就緒 (base_url: {_api_cfg['base_url']})")
 
 def _reset_phase_slots():
-    from state_manager import _get_phase_slots_file
-    import json, fcntl
-    path = _get_phase_slots_file()
+    from state_manager import _get_phase_slots_file, _get_phase_slots_lock_file
+    import json, fcntl, tempfile, os
+    data_path = _get_phase_slots_file()
+    lock_path = _get_phase_slots_lock_file()
     base = {"phase1_chunking": 0, "phase2_summarizing": 0, "phase3_embedding": 0, "phase4_db_insert": 0}
     try:
-        with open(path, 'w') as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with open(lock_path, 'w') as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
             try:
-                json.dump(base, f)
+                dir_path = os.path.dirname(data_path) or '.'
+                os.makedirs(dir_path, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
+                                                 prefix='.phase_slots_tmp_', suffix='.json') as tf:
+                    tmp_path = tf.name
+                    json.dump(base, tf)
+                os.replace(tmp_path, data_path)
             finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+                fcntl.flock(lf, fcntl.LOCK_UN)
         logger.info("✅ 相位槽已重置（啟動清理）")
     except Exception as e:
         logger.warning(f"⚠️ 無法重置相位槽: {e}")
@@ -178,8 +185,10 @@ def _report_progress():
                                         overall_stats["model_performance"][m]["success"] += count
                                     for err, count in s.get("error_distribution", {}).items():
                                         overall_stats["errors"][err] = overall_stats["errors"].get(err, 0) + count
-                            except: pass
-        except: pass
+                            except Exception:
+                                logger.debug(f"無法讀取統計檔 {stats_file}")
+        except Exception:
+            logger.debug(f"無法讀取 batch 檔案 {bf}")
 
     delta_files = done_files - LAST_REPORT_STATS["done_files"]
     delta_chunks = overall_stats["llm_success"] - LAST_REPORT_STATS["llm_success"]
@@ -246,7 +255,8 @@ def check_and_reset_if_needed(batch_file, active_file_ids=None):
     try:
         with open(batch_file, 'r', encoding='utf-8') as f:
             data = _normalize_batch_data(json.load(f))
-    except:
+    except Exception:
+        logger.debug(f"無法讀取 batch 檔案 {batch_file} 用於卡住檢測")
         return
     updated = False
     for item in data:
@@ -264,7 +274,8 @@ def check_and_reset_if_needed(batch_file, active_file_ids=None):
                 set_status_file(batch_file)
                 update_state(file_id, 'undone')
                 updated = True
-        except: pass
+        except Exception:
+            logger.debug(f"無法解析時間戳: 檔案 {file_id}, last_updated={last_updated}")
 
 def _retry_chunk(file_id, chunk, batch_file):
     from summarize_pipeline import call_llm
@@ -296,7 +307,8 @@ def run_failed_chunk_retry(batch_file):
     try:
         with open(batch_file, 'r', encoding='utf-8') as f:
             data = _normalize_batch_data(json.load(f))
-    except:
+    except Exception:
+        logger.debug(f"無法讀取 batch 檔案 {batch_file} 用於重試")
         return False
     any_retried = False
     for item in data:
@@ -355,7 +367,9 @@ def run_batch_processor(batch_file):
     try:
         with open(batch_file, 'r', encoding='utf-8') as f:
             data = _normalize_batch_data(json.load(f))
-    except: return
+    except Exception:
+        logger.debug(f"無法讀取 batch 檔案 {batch_file} 用於 processor")
+        return
     if run_failed_chunk_retry(batch_file): return
 
     launched = 0
@@ -425,7 +439,8 @@ def main():
                                         elif cur_status == 'db_inserting':
                                             update_state(file_id, 'done')
                                         break
-                            except: pass
+                            except Exception:
+                                logger.debug(f"無法處理完成任務: 檔案 {file_id}, batch {bf}")
                     else:
                         logger.error(f"❌ 任務失敗,檔案 {file_id}, 退出碼: {retcode}")
                         batch_files = [os.path.join(OUTPUT_DIR, f) for f in os.listdir(OUTPUT_DIR) if f.startswith('batch_status_') and f.endswith('.json')]
@@ -437,7 +452,8 @@ def main():
                                     set_status_file(bf)
                                     update_state(file_id, 'failed')
                                     break
-                            except: pass
+                            except Exception:
+                                logger.debug(f"無法處理失敗任務: 檔案 {file_id}, batch {bf}")
                     release_phase_slot(phase)
                     active_processes.remove(entry)
 
@@ -455,7 +471,8 @@ def main():
                             if item.get('status') == 'failed':
                                 set_status_file(bf)
                                 update_state(fid, 'undone')
-                    except: pass
+                    except Exception:
+                        logger.debug(f"無法處理失敗重置: batch {bf}")
                 for bf in batch_files: check_and_reset_if_needed(bf, active_ids)
                 for bf in batch_files:
                     try:
@@ -463,7 +480,8 @@ def main():
                             bdata = _normalize_batch_data(json.load(f))
                         if any(_get_next_phase(i.get('status'))[0] for i in bdata):
                             run_batch_processor(bf)
-                    except: pass
+                    except Exception:
+                        logger.debug(f"無法啟動 processor: batch {bf}")
             
             time.sleep(CHECK_INTERVAL_SEC)
         except KeyboardInterrupt:

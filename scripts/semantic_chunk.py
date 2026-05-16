@@ -284,7 +284,12 @@ def smart_merge_3_0(entries: List[SubtitleEntry], file_id: int,
     if total_entries < window_size:
         return [{'start_idx': 0, 'end_idx': total_entries - 1,
                  'start_time': entries[0].start_time, 'end_time': entries[-1].end_time,
-                 'text': ' '.join(e.text for e in entries)}], [], []
+                 'entry_count': total_entries,
+                 'text_content': ' '.join(e.text for e in entries),
+                 'boundary_type': 'single_chunk',
+                 'left_boundary': {'boundary_side': 'left', 'strength_pct': None, 'cosine': None, 'label': '檔案起點'},
+                 'right_boundary': {'boundary_side': 'right', 'strength_pct': None, 'cosine': None, 'label': '檔案終點'},
+                 'chunk_id': f"{file_id}_0"}], [], []
 
     windows = [' '.join(e.text for e in entries[i:i + window_size])
                for i in range(total_entries - window_size + 1)]
@@ -302,7 +307,12 @@ def smart_merge_3_0(entries: List[SubtitleEntry], file_id: int,
     if not sims:
         return [{'start_idx': 0, 'end_idx': total_entries - 1,
                  'start_time': entries[0].start_time, 'end_time': entries[-1].end_time,
-                 'text': ' '.join(e.text for e in entries)}], failed_windows, []
+                 'entry_count': total_entries,
+                 'text_content': ' '.join(e.text for e in entries),
+                 'boundary_type': 'single_chunk',
+                 'left_boundary': {'boundary_side': 'left', 'strength_pct': None, 'cosine': None, 'label': '檔案起點'},
+                 'right_boundary': {'boundary_side': 'right', 'strength_pct': None, 'cosine': None, 'label': '檔案終點'},
+                 'chunk_id': f"{file_id}_0"}], failed_windows, []
 
     n_sims = len(sims)
     strengths = [1.0 - s for s in sims]
@@ -335,7 +345,7 @@ def semantic_chunk(entries: List[SubtitleEntry], file_id: int, threshold: Union[
         return []
 
     # 執行 Smart Merge 3.0
-    final_chunks, failed_indices = smart_merge_3_0(
+    final_chunks, failed_indices, discarded_chunks = smart_merge_3_0(
         entries=current_entries,
         file_id=file_id,
         window_size=SMART_MERGE_WINDOW_SIZE,
@@ -352,7 +362,8 @@ def semantic_chunk(entries: List[SubtitleEntry], file_id: int, threshold: Union[
             with open(failed_path, 'w', encoding='utf-8') as f:
                 json.dump(failed_indices, f, ensure_ascii=False, indent=2)
             logger.warning(f"⚠️ 發現 {len(failed_indices)} 個嵌入失敗的窗口")
-        except: pass
+        except Exception as e:
+            logger.warning(f"寫入失敗 chunk 記錄時出錯: {e}")
         raise RuntimeError(f"Smart Merge 失敗：共有 {len(failed_indices)} 個窗口向量化失敗。已停止流程要求人工檢查。")
 
     if not final_chunks:
@@ -360,5 +371,7 @@ def semantic_chunk(entries: List[SubtitleEntry], file_id: int, threshold: Union[
 
     # 更新進度
     _mark_progress_complete(file_id, total_entries, len(final_chunks), len(failed_indices))  # chunk_count, failed_windows
+    if discarded_chunks:
+        logger.info(f"Smart Merge excluded {len(discarded_chunks)} noise chunks")
     logger.info(f"✅ Smart Merge 成功：產出 {len(final_chunks)} 個語意段落")
     return final_chunks
